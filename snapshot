@@ -1,0 +1,80 @@
+#!/bin/bash
+
+# Function to check if a command exists, and install Figlet if missing
+ensure_figlet_installed() {
+    if ! command -v figlet >/dev/null 2>&1; then
+        echo "Figlet is missing. Installing now..."
+        sudo apt-get update && sudo apt-get install -y figlet
+    fi
+}
+ensure_figlet_installed
+
+# Add a pause and display a custom banner
+sleep 1
+figlet "Story Snapshot"
+sleep 1
+
+# Ensure wget, lz4, aria2, and pv are installed; if not, install them
+install_required_packages() {
+    if ! dpkg -l | grep -qw wget || ! dpkg -l | grep -qw lz4 || ! dpkg -l | grep -qw aria2 || ! dpkg -l | grep -qw pv; then
+        echo "Some essential packages are missing. Installing them now..."
+        sudo apt-get update
+        sudo apt-get install -y wget lz4 aria2 pv
+    else
+        echo "All required packages are already installed."
+    fi
+}
+install_required_packages
+
+# Stop existing Story and Geth services
+echo "Shutting down running node services..."
+sudo systemctl stop story
+sudo systemctl stop story-geth
+
+# Download Geth snapshot using multiple connections
+echo "Fetching Geth snapshot..."
+cd "$HOME"
+aria2c -x 16 -s 16 http://story-snapshot.xxxigm.xyz/geth-snapshot.lz4
+
+# Download Story snapshot using aria2c
+echo "Fetching Story snapshot..."
+aria2c -x 16 -s 16 http://story-snapshot.xxxigm.xyz/story-snapshot.lz4
+
+# Back up priv_validator_state.json file
+echo "Backing up validator state..."
+if [ -f "$HOME/.story/story/data/priv_validator_state.json" ]; then
+    mv "$HOME/.story/story/data/priv_validator_state.json" "$HOME/.story/priv_validator_state.json.backup"
+fi
+
+# Remove old node data to prepare for fresh snapshot extraction
+echo "Cleaning up old data..."
+rm -rf "$HOME/.story/story/data"
+rm -rf "$HOME/.story/geth/iliad/geth/chaindata"
+
+# Extract Story snapshot into appropriate directory
+echo "Extracting Story snapshot..."
+sudo mkdir -p /root/.story/story/data
+lz4 -d story-snapshot.lz4 | pv | sudo tar xvf - -C /root/.story/story/
+
+# Extract Geth snapshot into appropriate directory
+echo "Extracting Geth snapshot..."
+sudo mkdir -p /root/.story/geth/iliad/geth/chaindata
+lz4 -d geth-snapshot.lz4 | pv | sudo tar xvf - -C /root/.story/geth/iliad/geth/
+
+# Restore the backup of priv_validator_state.json
+echo "Restoring validator state backup..."
+if [ -f "$HOME/.story/priv_validator_state.json.backup" ]; then
+    mv "$HOME/.story/priv_validator_state.json.backup" "$HOME/.story/story/data/priv_validator_state.json"
+fi
+
+# Start the node services again
+echo "Restarting the node services..."
+sudo systemctl start story
+sudo systemctl start story-geth
+
+# Remove the snapshot files after extraction is complete
+echo "Cleaning up snapshot files..."
+rm -f story-snapshot.lz4
+rm -f geth-snapshot.lz4
+
+echo "Node services have been restarted successfully."
